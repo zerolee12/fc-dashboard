@@ -100,6 +100,19 @@
   }
   .btn-capture:hover { background: #0f3460; color: #fff; border-color: #3498db; }
   .btn-capture:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-delete {
+    margin-top: 8px;
+    margin-left: 8px;
+    padding: 6px 12px;
+    border: 1px solid #e74c3c;
+    border-radius: 6px;
+    background: #1a1a2e;
+    color: #e74c3c;
+    cursor: pointer;
+    font-size: 11px;
+  }
+  .btn-delete:hover { background: #e74c3c; color: #fff; }
+  .btn-delete.hidden { display: none; }
   .no-players {
     text-align: center;
     color: #555;
@@ -117,6 +130,9 @@
 <body>
 
 <h1>FC Auto Manager</h1>
+<div style="text-align:center; margin-bottom:16px;">
+  <button id="adminBtn" onclick="toggleAdmin()" style="padding:6px 16px; border:1px solid #555; border-radius:6px; background:#1a1a2e; color:#888; cursor:pointer; font-size:12px;">관리자 모드</button>
+</div>
 <div class="cards" id="cards"></div>
 <div class="no-players" id="noPlayers">연결된 플레이어가 없습니다.</div>
 <div class="footer">FC Auto Manager Dashboard v3.0</div>
@@ -215,6 +231,7 @@
             : `<div class="capture-placeholder">캡처 이미지 없음</div>`
           }
           <button class="btn-capture" onclick="requestCapture('${id}')">새로고침</button>
+          <button class="btn-delete ${window._isAdmin ? '' : 'hidden'}" onclick="deletePlayer('${id}')">삭제</button>
         </div>
       `;
     });
@@ -224,6 +241,37 @@
       if (!ids.includes(card.dataset.id)) card.remove();
     });
   }
+
+  // 관리자 모드
+  const ADMIN_PW = "9155";
+  window._isAdmin = false;
+
+  window.toggleAdmin = function() {
+    if (window._isAdmin) {
+      window._isAdmin = false;
+      document.getElementById("adminBtn").textContent = "관리자 모드";
+      document.getElementById("adminBtn").style.borderColor = "#555";
+      document.getElementById("adminBtn").style.color = "#888";
+      document.querySelectorAll(".btn-delete").forEach(b => b.classList.add("hidden"));
+    } else {
+      const pw = prompt("관리자 비밀번호를 입력하세요:");
+      if (pw === ADMIN_PW) {
+        window._isAdmin = true;
+        document.getElementById("adminBtn").textContent = "관리자 모드 ✓";
+        document.getElementById("adminBtn").style.borderColor = "#e94560";
+        document.getElementById("adminBtn").style.color = "#e94560";
+        document.querySelectorAll(".btn-delete").forEach(b => b.classList.remove("hidden"));
+      } else if (pw !== null) {
+        alert("비밀번호가 틀렸습니다.");
+      }
+    }
+  };
+
+  // 플레이어 삭제
+  window.deletePlayer = function(id) {
+    if (!confirm(`Player ${id}을(를) 삭제하시겠습니까?`)) return;
+    set(ref(db, `players/${id}`), null);
+  };
 
   // 캡처 요청
   window.requestCapture = function(id) {
