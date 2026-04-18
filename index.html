@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FC Auto Manager Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', -apple-system, sans-serif;
+    background: #1a1a2e;
+    color: #eee;
+    min-height: 100vh;
+    padding: 20px;
+  }
+  h1 {
+    text-align: center;
+    font-size: 24px;
+    margin-bottom: 24px;
+    color: #e0e0e0;
+  }
+  .cards {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    justify-content: center;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+  .card {
+    background: #16213e;
+    border-radius: 12px;
+    padding: 20px;
+    width: 380px;
+    border: 1px solid #0f3460;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  }
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .player-id {
+    font-size: 20px;
+    font-weight: 700;
+    color: #e94560;
+  }
+  .status-badge {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .status-게임중, .status-game { background: #2ecc71; color: #000; }
+  .status-대기, .status-wait { background: #3498db; color: #fff; }
+  .status-종료, .status-중지됨, .status-stop { background: #e74c3c; color: #fff; }
+  .status-offline { background: #555; color: #aaa; }
+  .status-fc없음 { background: #f39c12; color: #000; }
+  .info-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    font-size: 13px;
+    color: #aaa;
+    border-bottom: 1px solid #1a1a3e;
+  }
+  .info-row:last-child { border-bottom: none; }
+  .info-label { color: #777; }
+  .info-value { color: #ddd; font-weight: 500; }
+  .capture-area {
+    margin-top: 12px;
+    text-align: center;
+  }
+  .capture-img {
+    width: 100%;
+    border-radius: 8px;
+    border: 1px solid #333;
+    background: #111;
+    min-height: 80px;
+    object-fit: contain;
+    display: none;
+  }
+  .capture-placeholder {
+    color: #555;
+    font-size: 12px;
+    padding: 30px 0;
+    border: 1px dashed #333;
+    border-radius: 8px;
+  }
+  .btn-capture {
+    margin-top: 8px;
+    padding: 6px 16px;
+    border: 1px solid #555;
+    border-radius: 6px;
+    background: #1a1a2e;
+    color: #aaa;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .btn-capture:hover { background: #0f3460; color: #fff; border-color: #3498db; }
+  .btn-capture:disabled { opacity: 0.4; cursor: not-allowed; }
+  .no-players {
+    text-align: center;
+    color: #555;
+    font-size: 16px;
+    margin-top: 60px;
+  }
+  .footer {
+    text-align: center;
+    margin-top: 40px;
+    color: #333;
+    font-size: 11px;
+  }
+</style>
+</head>
+<body>
+
+<h1>FC Auto Manager</h1>
+<div class="cards" id="cards"></div>
+<div class="no-players" id="noPlayers">연결된 플레이어가 없습니다.</div>
+<div class="footer">FC Auto Manager Dashboard v3.0</div>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js";
+  import { getDatabase, ref, onValue, set } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-database.js";
+
+  // Firebase 설정 — URL에서 프로젝트 ID 추출
+  const DB_URL = "https://fc-automanager-default-rtdb.asia-southeast1.firebasedatabase.app";
+  const projectId = DB_URL.split("//")[1].split("-default-rtdb")[0];
+
+  const app = initializeApp({
+    databaseURL: DB_URL,
+    projectId: projectId,
+  });
+  const db = getDatabase(app);
+
+  const cardsEl = document.getElementById("cards");
+  const noPlayersEl = document.getElementById("noPlayers");
+
+  function getStatusClass(status) {
+    if (!status) return "status-offline";
+    const s = status.toLowerCase();
+    if (s.includes("게임중")) return "status-게임중";
+    if (s.includes("대기")) return "status-대기";
+    if (s.includes("종료") || s.includes("중지")) return "status-종료";
+    if (s.includes("fc") || s.includes("없음")) return "status-fc없음";
+    return "status-대기";
+  }
+
+  function isOffline(lastUpdate) {
+    if (!lastUpdate) return true;
+    const last = new Date(lastUpdate).getTime();
+    const now = Date.now();
+    return (now - last) > 2 * 60 * 1000; // 2분
+  }
+
+  function timeSince(lastUpdate) {
+    if (!lastUpdate) return "-";
+    const last = new Date(lastUpdate).getTime();
+    const diff = Math.floor((Date.now() - last) / 1000);
+    if (diff < 60) return `${diff}초 전`;
+    if (diff < 3600) return `${Math.floor(diff/60)}분 전`;
+    return `${Math.floor(diff/3600)}시간 전`;
+  }
+
+  function renderPlayers(players) {
+    if (!players || Object.keys(players).length === 0) {
+      cardsEl.innerHTML = "";
+      noPlayersEl.style.display = "block";
+      return;
+    }
+    noPlayersEl.style.display = "none";
+
+    // 기존 카드 유지하면서 업데이트
+    const ids = Object.keys(players).sort();
+    const existingIds = new Set([...cardsEl.querySelectorAll(".card")].map(c => c.dataset.id));
+
+    ids.forEach(id => {
+      const p = players[id];
+      if (!p || typeof p !== "object") return;
+
+      const offline = isOffline(p.last_update);
+      const statusText = offline ? "오프라인" : (p.status || "알 수 없음");
+      const statusClass = offline ? "status-offline" : getStatusClass(p.status);
+      const fcText = p.fc_online === false ? "감지 안 됨" : "감지 됨";
+      const fcColor = p.fc_online === false ? "#e74c3c" : "#2ecc71";
+
+      let card = cardsEl.querySelector(`.card[data-id="${id}"]`);
+      if (!card) {
+        card = document.createElement("div");
+        card.className = "card";
+        card.dataset.id = id;
+        cardsEl.appendChild(card);
+      }
+
+      const hasCap = p.capture_data && p.capture_data.startsWith("data:image");
+
+      card.innerHTML = `
+        <div class="card-header">
+          <span class="player-id">Player ${id}</span>
+          <span class="status-badge ${statusClass}">${statusText}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">FC ONLINE</span>
+          <span class="info-value" style="color:${fcColor}">${fcText}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">마지막 활동</span>
+          <span class="info-value">${p.last_update || "-"} (${timeSince(p.last_update)})</span>
+        </div>
+        <div class="capture-area">
+          ${hasCap
+            ? `<img class="capture-img" src="${p.capture_data}" style="display:block" />`
+            : `<div class="capture-placeholder">캡처 이미지 없음</div>`
+          }
+          <button class="btn-capture" onclick="requestCapture('${id}')">새로고침</button>
+        </div>
+      `;
+    });
+
+    // 삭제된 플레이어 카드 제거
+    [...cardsEl.querySelectorAll(".card")].forEach(card => {
+      if (!ids.includes(card.dataset.id)) card.remove();
+    });
+  }
+
+  // 캡처 요청
+  window.requestCapture = function(id) {
+    set(ref(db, `players/${id}/capture_requested`), true);
+    const btn = event.target;
+    btn.disabled = true;
+    btn.textContent = "요청 중...";
+    setTimeout(() => { btn.disabled = false; btn.textContent = "새로고침"; }, 5000);
+  };
+
+  // 실시간 리스너
+  onValue(ref(db, "players"), (snapshot) => {
+    renderPlayers(snapshot.val());
+  });
+
+  // 시간 표시 주기적 갱신 (1분마다)
+  setInterval(() => {
+    const players = {};
+    document.querySelectorAll(".card").forEach(c => { players[c.dataset.id] = true; });
+    // onValue가 이미 갱신하므로 별도 처리 불필요
+  }, 60000);
+</script>
+
+</body>
+</html>
