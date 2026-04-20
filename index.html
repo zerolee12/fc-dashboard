@@ -98,9 +98,17 @@
     color: #aaa;
     cursor: pointer;
     font-size: 12px;
+    min-width: 80px;
   }
-  .btn-capture:hover { background: #0f3460; color: #fff; border-color: #3498db; }
-  .btn-capture:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-capture:hover:not(:disabled) {
+    background: #0f3460;
+    color: #fff;
+    border-color: #3498db;
+  }
+  .btn-capture:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
   .btn-delete {
     margin-top: 8px;
     margin-left: 8px;
@@ -142,7 +150,6 @@
   import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js";
   import { getDatabase, ref, onValue, set } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-database.js";
 
-  // Firebase 설정 — URL에서 프로젝트 ID 추출
   const DB_URL = "https://fc-automanager-default-rtdb.asia-southeast1.firebasedatabase.app";
   const projectId = DB_URL.split("//")[1].split("-default-rtdb")[0];
 
@@ -150,14 +157,41 @@
     databaseURL: DB_URL,
     projectId: projectId,
   });
-  const db = getDatabase(app);
 
+  const db = getDatabase(app);
   const cardsEl = document.getElementById("cards");
   const noPlayersEl = document.getElementById("noPlayers");
 
+  // 플레이어별 캡처 버튼 쿨타임 저장
+  const captureCooldowns = {};
+
+  function getRemainingCooldown(id) {
+    const endTime = captureCooldowns[id] || 0;
+    const remaining = Math.ceil((endTime - Date.now()) / 1000);
+    return Math.max(0, remaining);
+  }
+
+  function updateCooldownButtons() {
+    document.querySelectorAll(".card").forEach(card => {
+      const id = card.dataset.id;
+      const btn = card.querySelector(".btn-capture");
+      if (!btn) return;
+
+      const remaining = getRemainingCooldown(id);
+
+      if (remaining > 0) {
+        btn.disabled = true;
+        btn.textContent = String(remaining);
+      } else {
+        btn.disabled = false;
+        btn.textContent = "새로고침";
+      }
+    });
+  }
+
   function getStatusClass(status) {
     if (!status) return "status-offline";
-    const s = status.toLowerCase();
+    const s = String(status).toLowerCase();
     if (s.includes("게임중")) return "status-게임중";
     if (s.includes("대기")) return "status-대기";
     if (s.includes("종료") || s.includes("중지")) return "status-종료";
@@ -169,16 +203,17 @@
     if (!lastUpdate) return true;
     const last = new Date(lastUpdate).getTime();
     const now = Date.now();
-    return (now - last) > 2 * 60 * 1000; // 2분
+    return (now - last) > 2 * 60 * 1000;
   }
 
   function timeSince(lastUpdate) {
     if (!lastUpdate) return "-";
     const last = new Date(lastUpdate).getTime();
     const diff = Math.floor((Date.now() - last) / 1000);
+
     if (diff < 60) return `${diff}초 전`;
-    if (diff < 3600) return `${Math.floor(diff/60)}분 전`;
-    return `${Math.floor(diff/3600)}시간 전`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}분 전`;
+    return `${Math.floor(diff / 3600)}시간 전`;
   }
 
   function renderPlayers(players) {
@@ -187,11 +222,10 @@
       noPlayersEl.style.display = "block";
       return;
     }
+
     noPlayersEl.style.display = "none";
 
-    // 기존 카드 유지하면서 업데이트
     const ids = Object.keys(players).sort();
-    const existingIds = new Set([...cardsEl.querySelectorAll(".card")].map(c => c.dataset.id));
 
     ids.forEach(id => {
       const p = players[id];
@@ -202,8 +236,11 @@
       const statusClass = offline ? "status-offline" : getStatusClass(p.status);
       const fcText = p.fc_online === false ? "감지 안 됨" : "감지 됨";
       const fcColor = p.fc_online === false ? "#e74c3c" : "#2ecc71";
+      const hasCap = p.capture_data && p.capture_data.startsWith("data:image");
+      const remainingCooldown = getRemainingCooldown(id);
 
       let card = cardsEl.querySelector(`.card[data-id="${id}"]`);
+
       if (!card) {
         card = document.createElement("div");
         card.className = "card";
@@ -211,36 +248,55 @@
         cardsEl.appendChild(card);
       }
 
-      const hasCap = p.capture_data && p.capture_data.startsWith("data:image");
-
       card.innerHTML = `
         <div class="card-header">
           <span class="player-id">Player ${id}</span>
           <span class="status-badge ${statusClass}">${statusText}</span>
         </div>
+
         <div class="info-row">
           <span class="info-label">FC ONLINE</span>
           <span class="info-value" style="color:${fcColor}">${fcText}</span>
         </div>
+
         <div class="info-row">
           <span class="info-label">마지막 활동</span>
           <span class="info-value">${p.last_update || "-"} (${timeSince(p.last_update)})</span>
         </div>
+
         <div class="capture-area">
-          ${hasCap
-            ? `<img class="capture-img" src="${p.capture_data}" style="display:block" />`
-            : `<div class="capture-placeholder">캡처 이미지 없음</div>`
+          ${
+            hasCap
+              ? `<img class="capture-img" src="${p.capture_data}" style="display:block" />`
+              : `<div class="capture-placeholder">캡처 이미지 없음</div>`
           }
-          <button class="btn-capture" onclick="requestCapture('${id}')">새로고침</button>
-          <button class="btn-delete ${window._isAdmin ? '' : 'hidden'}" onclick="deletePlayer('${id}')">삭제</button>
+
+          <button
+            class="btn-capture"
+            onclick="requestCapture('${id}', this)"
+            ${remainingCooldown > 0 ? "disabled" : ""}
+          >
+            ${remainingCooldown > 0 ? remainingCooldown : "새로고침"}
+          </button>
+
+          <button
+            class="btn-delete ${window._isAdmin ? '' : 'hidden'}"
+            onclick="deletePlayer('${id}')"
+          >
+            삭제
+          </button>
         </div>
       `;
     });
 
-    // 삭제된 플레이어 카드 제거
     [...cardsEl.querySelectorAll(".card")].forEach(card => {
-      if (!ids.includes(card.dataset.id)) card.remove();
+      if (!ids.includes(card.dataset.id)) {
+        delete captureCooldowns[card.dataset.id];
+        card.remove();
+      }
     });
+
+    updateCooldownButtons();
   }
 
   // 관리자 모드
@@ -248,52 +304,70 @@
   window._isAdmin = false;
 
   window.toggleAdmin = function() {
+    const adminBtn = document.getElementById("adminBtn");
+
     if (window._isAdmin) {
       window._isAdmin = false;
-      document.getElementById("adminBtn").textContent = "관리자 모드";
-      document.getElementById("adminBtn").style.borderColor = "#555";
-      document.getElementById("adminBtn").style.color = "#888";
-      document.querySelectorAll(".btn-delete").forEach(b => b.classList.add("hidden"));
-    } else {
-      const pw = prompt("관리자 비밀번호를 입력하세요:");
-      if (pw === ADMIN_PW) {
-        window._isAdmin = true;
-        document.getElementById("adminBtn").textContent = "관리자 모드 ✓";
-        document.getElementById("adminBtn").style.borderColor = "#e94560";
-        document.getElementById("adminBtn").style.color = "#e94560";
-        document.querySelectorAll(".btn-delete").forEach(b => b.classList.remove("hidden"));
-      } else if (pw !== null) {
-        alert("비밀번호가 틀렸습니다.");
-      }
+      adminBtn.textContent = "관리자 모드";
+      adminBtn.style.borderColor = "#555";
+      adminBtn.style.color = "#888";
+      document.querySelectorAll(".btn-delete").forEach(btn => btn.classList.add("hidden"));
+      return;
+    }
+
+    const pw = prompt("관리자 비밀번호를 입력하세요:");
+    if (pw === ADMIN_PW) {
+      window._isAdmin = true;
+      adminBtn.textContent = "관리자 모드 ✓";
+      adminBtn.style.borderColor = "#e94560";
+      adminBtn.style.color = "#e94560";
+      document.querySelectorAll(".btn-delete").forEach(btn => btn.classList.remove("hidden"));
+    } else if (pw !== null) {
+      alert("비밀번호가 틀렸습니다.");
     }
   };
 
-  // 플레이어 삭제
   window.deletePlayer = function(id) {
     if (!confirm(`Player ${id}을(를) 삭제하시겠습니까?`)) return;
     set(ref(db, `players/${id}`), null);
   };
 
-  // 캡처 요청
-  window.requestCapture = function(id) {
+  window.requestCapture = function(id, btn) {
+    const remaining = getRemainingCooldown(id);
+    if (remaining > 0) return;
+
     set(ref(db, `players/${id}/capture_requested`), true);
-    const btn = event.target;
-    btn.disabled = true;
-    btn.textContent = "요청 중...";
-    setTimeout(() => { btn.disabled = false; btn.textContent = "새로고침"; }, 5000);
+
+    // 10초 쿨타임 시작
+    captureCooldowns[id] = Date.now() + 10000;
+
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "10";
+    }
+
+    updateCooldownButtons();
   };
 
-  // 실시간 리스너
+  // 실시간 플레이어 데이터 반영
   onValue(ref(db, "players"), (snapshot) => {
     renderPlayers(snapshot.val());
   });
 
-  // 시간 표시 주기적 갱신 (1분마다)
+  // 1초마다 쿨다운 숫자 갱신
   setInterval(() => {
-    const players = {};
-    document.querySelectorAll(".card").forEach(c => { players[c.dataset.id] = true; });
-    // onValue가 이미 갱신하므로 별도 처리 불필요
-  }, 60000);
+    updateCooldownButtons();
+  }, 1000);
+
+  // 10초마다 마지막 활동 표시도 새로 반영
+  setInterval(() => {
+    const cards = document.querySelectorAll(".card");
+    if (cards.length > 0) {
+      onValue(ref(db, "players"), (snapshot) => {
+        renderPlayers(snapshot.val());
+      }, { onlyOnce: true });
+    }
+  }, 10000);
 </script>
 
 </body>
