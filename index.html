@@ -144,7 +144,7 @@
 </div>
 <div class="cards" id="cards"></div>
 <div class="no-players" id="noPlayers">연결된 플레이어가 없습니다.</div>
-<div class="footer">FC Auto Manager Dashboard v3.0</div>
+<div class="footer">FC Auto Manager Dashboard v3.1</div>
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js";
@@ -161,6 +161,9 @@
   const db = getDatabase(app);
   const cardsEl = document.getElementById("cards");
   const noPlayersEl = document.getElementById("noPlayers");
+
+  // 플레이어 데이터를 메모리에 보관 (timeSince 갱신용)
+  let playersCache = {};
 
   // 플레이어별 캡처 버튼 쿨타임 저장
   const captureCooldowns = {};
@@ -216,14 +219,33 @@
     return `${Math.floor(diff / 3600)}시간 전`;
   }
 
+  // ✅ "N분 전" 텍스트만 갱신 (DB 요청 없음)
+  function refreshTimeSince() {
+    document.querySelectorAll(".card").forEach(card => {
+      const id = card.dataset.id;
+      const p = playersCache[id];
+      if (!p) return;
+
+      const valueEl = card.querySelector(".info-row:nth-child(3) .info-value");
+      if (!valueEl) return;
+
+      const lastUpdate = p.last_update || "-";
+      valueEl.textContent = `${lastUpdate} (${timeSince(lastUpdate)})`;
+    });
+  }
+
   function renderPlayers(players) {
     if (!players || Object.keys(players).length === 0) {
       cardsEl.innerHTML = "";
       noPlayersEl.style.display = "block";
+      playersCache = {};
       return;
     }
 
     noPlayersEl.style.display = "none";
+
+    // ✅ 최신 데이터를 메모리에 저장
+    playersCache = players;
 
     const ids = Object.keys(players).sort();
 
@@ -349,25 +371,21 @@
     updateCooldownButtons();
   };
 
-  // 실시간 플레이어 데이터 반영
+  // ✅ 실시간 플레이어 데이터 반영 (Firebase가 변경사항 자동 감지)
   onValue(ref(db, "players"), (snapshot) => {
     renderPlayers(snapshot.val());
   });
 
-  // 1초마다 쿨다운 숫자 갱신
+  // ✅ 1초마다 쿨다운 숫자 갱신
   setInterval(() => {
     updateCooldownButtons();
   }, 1000);
 
-  // 10초마다 마지막 활동 표시도 새로 반영
+  // ✅ 10초마다 "N분 전" 텍스트만 갱신 (DB 요청 없음!)
   setInterval(() => {
-    const cards = document.querySelectorAll(".card");
-    if (cards.length > 0) {
-      onValue(ref(db, "players"), (snapshot) => {
-        renderPlayers(snapshot.val());
-      }, { onlyOnce: true });
-    }
+    refreshTimeSince();
   }, 10000);
+
 </script>
 
 </body>
